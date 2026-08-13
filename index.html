@@ -20,8 +20,9 @@
   #teleWrap{position:absolute; left:0; right:0; overflow:hidden; pointer-events:none; z-index:4}
   #teleWrap.shaded{background:linear-gradient(to bottom,transparent,rgba(0,0,0,.5) 12%,rgba(0,0,0,.5) 88%,transparent)}
   #teleText{position:absolute; top:0; left:0; right:0; padding:0 7%; text-align:center;
-    color:#fff; font-weight:700; line-height:1.32; white-space:pre-wrap; word-wrap:break-word;
+    color:#fff; font-weight:700; line-height:1.32; white-space:normal; word-wrap:break-word;
     text-shadow:0 2px 10px rgba(0,0,0,.9),0 0 4px rgba(0,0,0,.8); will-change:transform}
+  #teleText .w.cur{color:#ffe14d}
 
   #startScreen{position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px; padding:28px; text-align:center; background:radial-gradient(circle at 50% 35%,#1b2130,#000); z-index:10}
   #startScreen h1{font-size:22px; margin:0}
@@ -136,6 +137,7 @@ When you're ready, hit the red button. Let's go!</textarea>
         <label><input type="checkbox" id="mirrorCam" checked> Mirror me (so I'm not backwards on screen)</label>
         <label><input type="checkbox" id="shade" checked> Dark shade behind words (easier to read)</label>
         <label><input type="checkbox" id="burnIn"> Also show the words in the final video</label>
+        <label><input type="checkbox" id="voiceScroll"> 🎙 Scroll as I speak (beta) — moves with your voice</label>
       </div>
 
       <button class="doneBtn" id="doneBtn">Done</button>
@@ -164,8 +166,10 @@ When you're ready, hit the red button. Let's go!</textarea>
   const recordBtn=$('recordBtn'), recBadge=$('recBadge'), recTime=$('recTime'), countdownEl=$('countdown');
   const scriptBtn=$('scriptBtn'), sheet=$('sheet'), sheetOverlay=$('sheetOverlay'), doneBtn=$('doneBtn');
   const scriptEl=$('script'), speedEl=$('speed'), sizeEl=$('size'), speedVal=$('speedVal'), sizeVal=$('sizeVal');
-  const posSeg=$('posSeg'), mirrorCam=$('mirrorCam'), shade=$('shade'), burnIn=$('burnIn');
+  const posSeg=$('posSeg'), mirrorCam=$('mirrorCam'), shade=$('shade'), burnIn=$('burnIn'), voiceScroll=$('voiceScroll');
   const zoomEl=$('zoom'), zoomVal=$('zoomVal');
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let scriptWords=[], wordSpans=[], wordPtr=0, voiceTargetScroll=0, recog=null;
   const flipBtn=$('flipBtn'), flipBtn2=$('flipBtn2');
   const resultEl=$('result'), resultVideo=$('resultVideo'), saveBtn=$('saveBtn'), redoBtn=$('redoBtn'), saveNote=$('saveNote'), shareBtn=$('shareBtn');
   let currentFile=null;
@@ -191,7 +195,26 @@ When you're ready, hit the red button. Let's go!</textarea>
   });
   shade.onchange=()=>{ teleWrap.classList.toggle('shaded', shade.checked); };
   burnIn.onchange=()=>{ updateOverlayVisibility(); };
-  scriptEl.oninput=()=>{ teleText.textContent=scriptEl.value; resetScroll(); };
+  scriptEl.oninput=()=>{ buildOverlay(); resetScroll(); };
+
+  function escapeHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  // Build the reading text as individual word spans so voice-tracking can find each word's position.
+  function buildOverlay(){
+    const text=scriptEl.value.replace(/\r/g,''); const paras=text.split('\n');
+    let html=''; scriptWords=[]; let idx=0;
+    paras.forEach((p,pi)=>{
+      const words=p.split(/\s+/).filter(Boolean);
+      words.forEach(w=>{
+        html+='<span class="w">'+escapeHtml(w)+'</span> ';
+        scriptWords.push(w.toLowerCase().replace(/[^\w']/g,''));
+        idx++;
+      });
+      if(pi<paras.length-1) html+='<br><br>';
+    });
+    teleText.innerHTML=html;
+    wordSpans=Array.prototype.slice.call(teleText.querySelectorAll('.w'));
+    wordPtr=0;
+  }
 
   function updateOverlayVisibility(){
     // When burning into video, the words are drawn on the canvas instead, so hide the DOM layer.
@@ -231,7 +254,7 @@ When you're ready, hit the red button. Let's go!</textarea>
     const ok=await startCamera();
     if(!ok){ startBtn.disabled=false; startBtn.textContent='Turn on camera'; return; }
     startScreen.style.display='none';
-    teleText.textContent=scriptEl.value; applyTextStyle();
+    buildOverlay(); applyTextStyle();
     layoutOverlay(); updateOverlayVisibility(); resetScroll();
     lastTs=0; drawLoop();
   };
@@ -307,16 +330,55 @@ When you're ready, hit the red button. Let's go!</textarea>
     // advance scroll while recording
     if(recording){
       const d=dispSize();
-      const speedPx=parseInt(speedEl.value,10)*0.7;   // display px / sec
-      scrollPx-=speedPx*dt;
-      const textH = burnIn.checked ? 99999 : teleText.offsetHeight;
-      const regionH=d.h*FRAC[pos].h;
-      if(scrollPx + textH < 0){ scrollPx=regionH; }     // loop long scripts
+      if(voiceScroll.checked && recog){
+        // ease toward the position the voice tracker last matched
+        scrollPx += (voiceTargetScroll - scrollPx) * Math.min(1, dt*5);
+      } else {
+        const speedPx=parseInt(speedEl.value,10)*0.7;   // display px / sec
+        scrollPx-=speedPx*dt;
+        const textH = burnIn.checked ? 99999 : teleText.offsetHeight;
+        const regionH=d.h*FRAC[pos].h;
+        if(scrollPx + textH < 0){ scrollPx=regionH; }     // loop long scripts
+      }
       applyScroll();
     }
 
     if(burnIn.checked) drawBurnText();
   }
+
+  // ---- Voice tracking (beta) ----
+  function updateVoiceTarget(){
+    if(!wordSpans.length) return;
+    const i=Math.max(0, Math.min(wordPtr, wordSpans.length-1));
+    for(const s of wordSpans) s.classList.remove('cur');
+    const span=wordSpans[i]; if(!span) return;
+    span.classList.add('cur');
+    const regionH=dispSize().h*FRAC[pos].h;
+    voiceTargetScroll = regionH*0.28 - span.offsetTop;   // keep the current word near the top of the reading band
+  }
+  function onVoiceResult(e){
+    const res=e.results[e.results.length-1];
+    const spoken=(res[0].transcript||'').toLowerCase().replace(/[^\w\s']/g,' ').split(/\s+/).filter(Boolean);
+    const tail=spoken.slice(-3);   // match on the most recent words spoken
+    for(const sw of tail){
+      for(let j=wordPtr; j<Math.min(wordPtr+8, scriptWords.length); j++){
+        const t=scriptWords[j]; if(!t) continue;
+        if(t===sw || (sw.length>2 && (t.startsWith(sw)||sw.startsWith(t)))){ wordPtr=Math.max(wordPtr, j+1); break; }
+      }
+    }
+    updateVoiceTarget();
+  }
+  function startVoice(){
+    if(!SR){ showToast("Your browser can't do voice scrolling — using set speed instead",4000); return; }
+    try{
+      recog=new SR(); recog.continuous=true; recog.interimResults=true; recog.lang='en-US';
+      recog.onresult=onVoiceResult;
+      recog.onerror=function(){};
+      recog.onend=function(){ if(recording && voiceScroll.checked){ try{ recog.start(); }catch(e){} } };
+      recog.start();
+    }catch(e){ showToast('Voice scrolling could not start: '+e.message,4000); recog=null; }
+  }
+  function stopVoice(){ if(recog){ try{ recog.onend=null; recog.stop(); }catch(e){} recog=null; } }
 
   function pickMime(){
     const opts=['video/mp4;codecs=h264,aac','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
@@ -346,8 +408,9 @@ When you're ready, hit the red button. Let's go!</textarea>
       recording=true; recStart=performance.now();
       recordBtn.classList.add('recording'); recordBtn.disabled=false;
       recBadge.style.display='flex'; tick();
+      if(voiceScroll.checked){ wordPtr=0; updateVoiceTarget(); startVoice(); }
     } else {
-      recording=false; recorder.stop();
+      recording=false; recorder.stop(); stopVoice();
       recordBtn.classList.remove('recording'); recBadge.style.display='none'; clearTimeout(timerId);
     }
   };
