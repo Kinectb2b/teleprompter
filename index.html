@@ -239,7 +239,7 @@ When you're ready, hit the red button. Let's go!</textarea>
     if(stream) stream.getTracks().forEach(t=>t.stop());
     try{
       stream=await navigator.mediaDevices.getUserMedia({
-        video:{ facingMode:facing, width:{ideal:1920}, height:{ideal:1440} },
+        video:{ facingMode:facing, width:{ideal:1920}, height:{ideal:1440}, frameRate:{ideal:30} },
         audio:{ echoCancellation:true, noiseSuppression:true }
       });
     }catch(e){ showToast('Camera/mic blocked: '+e.message,5000); return false; }
@@ -256,7 +256,7 @@ When you're ready, hit the red button. Let's go!</textarea>
     startScreen.style.display='none';
     buildOverlay(); applyTextStyle();
     layoutOverlay(); updateOverlayVisibility(); resetScroll();
-    lastTs=0; drawLoop();
+    lastTs=0; scheduleDraw();
   };
   window.addEventListener('resize', ()=>{ layoutOverlay(); });
 
@@ -318,8 +318,15 @@ When you're ready, hit the red button. Let's go!</textarea>
     ctx.restore();
   }
 
-  function drawLoop(ts){
-    requestAnimationFrame(drawLoop);
+  // Draw in sync with the camera's actual frames (smoother recording, less stutter) where supported.
+  function scheduleDraw(){
+    if(video && 'requestVideoFrameCallback' in video){
+      video.requestVideoFrameCallback(function(now){ drawFrame(now); scheduleDraw(); });
+    } else {
+      requestAnimationFrame(function(now){ drawFrame(now); scheduleDraw(); });
+    }
+  }
+  function drawFrame(ts){
     if(!video) return;
     const now=ts||performance.now(); if(!lastTs) lastTs=now;
     const dt=Math.min(0.05,(now-lastTs)/1000); lastTs=now;
