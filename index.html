@@ -169,7 +169,7 @@ When you're ready, hit the red button. Let's go!</textarea>
   const posSeg=$('posSeg'), mirrorCam=$('mirrorCam'), shade=$('shade'), burnIn=$('burnIn'), voiceScroll=$('voiceScroll');
   const zoomEl=$('zoom'), zoomVal=$('zoomVal');
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let scriptWords=[], wordSpans=[], wordPtr=0, voiceTargetScroll=0, recog=null;
+  let scriptWords=[], wordSpans=[], wordPtr=0, voiceTargetScroll=0, recog=null, utterIdx=-1, consumed=0;
   const flipBtn=$('flipBtn'), flipBtn2=$('flipBtn2');
   const resultEl=$('result'), resultVideo=$('resultVideo'), saveBtn=$('saveBtn'), redoBtn=$('redoBtn'), saveNote=$('saveNote'), shareBtn=$('shareBtn');
   let currentFile=null;
@@ -357,19 +357,22 @@ When you're ready, hit the red button. Let's go!</textarea>
     voiceTargetScroll = regionH*0.28 - span.offsetTop;   // keep the current word near the top of the reading band
   }
   function onVoiceResult(e){
-    const res=e.results[e.results.length-1];
-    const spoken=(res[0].transcript||'').toLowerCase().replace(/[^\w\s']/g,' ').split(/\s+/).filter(Boolean);
-    const tail=spoken.slice(-3);   // match on the most recent words spoken
-    for(const sw of tail){
-      for(let j=wordPtr; j<Math.min(wordPtr+8, scriptWords.length); j++){
-        const t=scriptWords[j]; if(!t) continue;
-        if(t===sw || (sw.length>2 && (t.startsWith(sw)||sw.startsWith(t)))){ wordPtr=Math.max(wordPtr, j+1); break; }
+    const idx=e.results.length-1;
+    const spoken=(e.results[idx][0].transcript||'').toLowerCase().replace(/[^\w\s']/g,' ').split(/\s+/).filter(Boolean);
+    if(idx!==utterIdx){ utterIdx=idx; consumed=0; }   // a new phrase started
+    // Walk only the newly-heard words, in order, matching WHOLE words within a small window ahead.
+    for(let k=consumed; k<spoken.length; k++){
+      const sw=spoken[k];
+      for(let j=wordPtr; j<Math.min(wordPtr+6, scriptWords.length); j++){
+        if(scriptWords[j]===sw){ wordPtr=j+1; break; }   // exact whole-word match only
       }
     }
+    consumed=Math.max(0, spoken.length-1);   // keep the last (still-being-refined) word re-checkable
     updateVoiceTarget();
   }
   function startVoice(){
     if(!SR){ showToast("Your browser can't do voice scrolling — using set speed instead",4000); return; }
+    utterIdx=-1; consumed=0;
     try{
       recog=new SR(); recog.continuous=true; recog.interimResults=true; recog.lang='en-US';
       recog.onresult=onVoiceResult;
