@@ -66,8 +66,9 @@
   #resultBar{padding:14px 18px calc(env(safe-area-inset-bottom) + 18px); display:flex; flex-direction:column; gap:10px; background:#12151c}
   #resultBar .note{font-size:12.5px; color:#9aa4b5; line-height:1.5; text-align:center}
   #resultBar .btns{display:flex; gap:10px}
-  #saveBtn{flex:2; text-align:center; text-decoration:none; background:var(--ok); color:#000; font-weight:800; border-radius:14px; padding:15px; font-size:16px}
-  #redoBtn{flex:1; background:#2a3140; color:#fff; border:none; border-radius:14px; padding:15px; font-size:15px; font-weight:600; font-family:inherit}
+  #shareBtn{flex:2; background:var(--ok); color:#000; font-weight:800; border:none; border-radius:14px; padding:16px; font-size:16px; font-family:inherit}
+  #redoBtn{flex:1; background:#2a3140; color:#fff; border:none; border-radius:14px; padding:16px; font-size:15px; font-weight:600; font-family:inherit}
+  #saveBtn{display:block; text-align:center; text-decoration:none; color:#9aa4b5; font-size:13px; padding:2px}
 
   #toast{position:absolute; bottom:120px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,.8); padding:10px 16px; border-radius:12px; font-size:13px; z-index:8; display:none; max-width:80%; text-align:center}
 </style>
@@ -145,9 +146,10 @@ When you're ready, hit the red button. Let's go!</textarea>
     <video id="resultVideo" controls playsinline></video>
     <div id="resultBar">
       <div class="btns">
-        <a id="saveBtn" download="tiktok-teleprompter.mp4">⬇ Save video</a>
-        <button id="redoBtn">Retake</button>
+        <button id="shareBtn">📲 Save / Share</button>
+        <button id="redoBtn">↺ Retake</button>
       </div>
+      <a id="saveBtn" download="tiktok-teleprompter.mp4">⬇ Or just download the file</a>
       <div class="note" id="saveNote"></div>
     </div>
   </div>
@@ -165,7 +167,8 @@ When you're ready, hit the red button. Let's go!</textarea>
   const posSeg=$('posSeg'), mirrorCam=$('mirrorCam'), shade=$('shade'), burnIn=$('burnIn');
   const zoomEl=$('zoom'), zoomVal=$('zoomVal');
   const flipBtn=$('flipBtn'), flipBtn2=$('flipBtn2');
-  const resultEl=$('result'), resultVideo=$('resultVideo'), saveBtn=$('saveBtn'), redoBtn=$('redoBtn'), saveNote=$('saveNote');
+  const resultEl=$('result'), resultVideo=$('resultVideo'), saveBtn=$('saveBtn'), redoBtn=$('redoBtn'), saveNote=$('saveNote'), shareBtn=$('shareBtn');
+  let currentFile=null;
   const toast=$('toast');
 
   const W=1080, H=1920;            // recorded canvas (vertical 9:16)
@@ -335,7 +338,7 @@ When you're ready, hit the red button. Let's go!</textarea>
       const cs=canvas.captureStream(30);
       const a=stream.getAudioTracks()[0]; if(a) cs.addTrack(a);
       chunks=[]; const mime=pickMime();
-      try{ recorder=new MediaRecorder(cs, mime?{mimeType:mime,videoBitsPerSecond:8_000_000}:undefined); }
+      try{ recorder=new MediaRecorder(cs, mime?{mimeType:mime,videoBitsPerSecond:16_000_000,audioBitsPerSecond:128_000}:undefined); }
       catch(e){ showToast('Recording not supported: '+e.message,5000); recordBtn.disabled=false; return; }
       recorder._mime=mime||'video/webm';
       recorder.ondataavailable=e=>{ if(e.data&&e.data.size) chunks.push(e.data); };
@@ -357,16 +360,31 @@ When you're ready, hit the red button. Let's go!</textarea>
     const type=(recorder._mime||'').indexOf('mp4')>=0?'video/mp4':'video/webm';
     const ext=type==='video/mp4'?'mp4':'webm';
     const blob=new Blob(chunks,{type}); const url=URL.createObjectURL(blob);
-    resultVideo.src=url; saveBtn.href=url; saveBtn.download='tiktok-teleprompter.'+ext;
+    const fname='teleprompter-'+Math.floor(performance.now())+'.'+ext;
+    currentFile=new File([blob], fname, {type});
+    resultVideo.src=url; saveBtn.href=url; saveBtn.download=fname;
     const mb=(blob.size/1048576).toFixed(1);
     const clean = burnIn.checked ? '' : ' Clean recording — just you, no words on it.';
-    if(isIOS){
-      saveNote.innerHTML='<b>Save to camera roll:</b> tap the <b>share</b> icon in the player (or press &amp; hold the video) → <b>Save Video</b>, then open TikTok → + → Upload.'+clean+' ('+ext.toUpperCase()+', '+mb+' MB)';
+    const canShare = !!(navigator.canShare && navigator.canShare({files:[currentFile]}));
+    if(canShare){
+      saveNote.innerHTML='Tap <b>Save / Share</b> → then <b>Save Video</b> to send it to your camera roll, or pick <b>TikTok</b> to post it right away.'+clean+' ('+ext.toUpperCase()+', '+mb+' MB)';
+    } else if(isIOS){
+      saveNote.innerHTML='Tap the <b>share</b> icon in the player above → <b>Save Video</b> to add it to your camera roll, then open TikTok → + → Upload.'+clean+' ('+ext.toUpperCase()+', '+mb+' MB)';
     } else {
-      saveNote.innerHTML='Tap <b>Save video</b> to download, then upload it in TikTok.'+clean+' ('+ext.toUpperCase()+', '+mb+' MB)';
+      saveNote.innerHTML='Tap <b>Save / Share</b> (or the download link) to save it, then upload in TikTok.'+clean+' ('+ext.toUpperCase()+', '+mb+' MB)';
     }
     resultEl.style.display='flex';
   }
+
+  shareBtn.onclick=async ()=>{
+    if(!currentFile) return;
+    if(navigator.canShare && navigator.canShare({files:[currentFile]})){
+      try{ await navigator.share({files:[currentFile], title:'My video'}); }
+      catch(e){ /* user dismissed the share sheet — no action needed */ }
+    } else {
+      saveBtn.click(); // fallback: download the file
+    }
+  };
 
   redoBtn.onclick=()=>{ resultEl.style.display='none'; resultVideo.pause(); resetScroll(); };
   window.addEventListener('beforeunload',()=>{ if(stream) stream.getTracks().forEach(t=>t.stop()); });
