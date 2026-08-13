@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
+<title>Teleprompter for TikTok</title>
+<style>
+  :root{ --accent:#4f8cff; --rec:#ff2d55; --ok:#30d158; }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{margin:0; height:100%; background:#000; overflow:hidden;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; color:#fff}
+
+  #app{position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:#000}
+  #stage{position:relative; height:100dvh; aspect-ratio:9/16; max-width:100vw; background:#000; overflow:hidden}
+  canvas{width:100%; height:100%; display:block}
+
+  /* teleprompter text overlay — visible to the user, NOT part of the recording */
+  #teleWrap{position:absolute; left:0; right:0; overflow:hidden; pointer-events:none; z-index:4}
+  #teleWrap.shaded{background:linear-gradient(to bottom,transparent,rgba(0,0,0,.5) 12%,rgba(0,0,0,.5) 88%,transparent)}
+  #teleText{position:absolute; top:0; left:0; right:0; padding:0 7%; text-align:center;
+    color:#fff; font-weight:700; line-height:1.32; white-space:pre-wrap; word-wrap:break-word;
+    text-shadow:0 2px 10px rgba(0,0,0,.9),0 0 4px rgba(0,0,0,.8); will-change:transform}
+
+  #startScreen{position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px; padding:28px; text-align:center; background:radial-gradient(circle at 50% 35%,#1b2130,#000); z-index:10}
+  #startScreen h1{font-size:22px; margin:0}
+  #startScreen p{font-size:14px; color:#9aa4b5; margin:0; line-height:1.5; max-width:300px}
+  .big{background:var(--accent); color:#fff; border:none; border-radius:16px; padding:16px 26px; font-size:17px; font-weight:700; font-family:inherit}
+
+  #topbar{position:absolute; top:0; left:0; right:0; display:flex; align-items:center; justify-content:space-between; padding:calc(env(safe-area-inset-top) + 10px) 14px 10px; z-index:6; pointer-events:none}
+  #recBadge{display:none; align-items:center; gap:7px; background:rgba(0,0,0,.5); padding:6px 12px; border-radius:999px; font-size:14px; font-weight:700}
+  #recBadge .dot{width:10px;height:10px;border-radius:50%;background:var(--rec);animation:pulse 1s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+  .iconbtn{pointer-events:auto; width:44px; height:44px; border-radius:50%; border:none; background:rgba(0,0,0,.45); color:#fff; font-size:20px; display:flex; align-items:center; justify-content:center}
+
+  #controls{position:absolute; left:0; right:0; bottom:0; display:flex; align-items:center; justify-content:space-between; padding:16px 26px calc(env(safe-area-inset-bottom) + 22px); z-index:6}
+  #recordBtn{width:76px; height:76px; border-radius:50%; border:5px solid rgba(255,255,255,.85); background:var(--rec); display:flex; align-items:center; justify-content:center; padding:0}
+  #recordBtn.recording{background:#fff}
+  #recordBtn.recording::after{content:""; width:26px; height:26px; border-radius:5px; background:var(--rec)}
+  .sidebtn{width:52px; height:52px; border-radius:50%; border:none; background:rgba(0,0,0,.45); color:#fff; font-size:22px; display:flex; flex-direction:column; align-items:center; justify-content:center}
+  .sidebtn small{font-size:9px}
+
+  #sheet{position:absolute; left:0; right:0; bottom:0; background:#12151c; border-radius:20px 20px 0 0; padding:18px 18px calc(env(safe-area-inset-bottom) + 18px); z-index:20; transform:translateY(105%); transition:transform .25s ease; max-height:88dvh; overflow-y:auto}
+  #sheet.open{transform:translateY(0)}
+  #sheetOverlay{position:absolute; inset:0; background:rgba(0,0,0,.5); z-index:19; display:none}
+  #sheetOverlay.open{display:block}
+  .grab{width:40px; height:5px; border-radius:3px; background:#3a4150; margin:0 auto 14px}
+  .lbl{font-size:13px; color:#9aa4b5; margin:14px 0 7px}
+  .lbl:first-of-type{margin-top:0}
+  textarea{width:100%; min-height:140px; background:#1c212c; color:#fff; border:1px solid #2a3140; border-radius:12px; padding:12px; font-size:16px; line-height:1.5; font-family:inherit; resize:vertical}
+  .rangeRow{display:flex; align-items:center; gap:12px}
+  input[type=range]{flex:1; accent-color:var(--accent); height:26px}
+  .rangeRow b{font-variant-numeric:tabular-nums; min-width:54px; text-align:right; font-weight:600; font-size:14px}
+  .seg{display:flex; gap:8px; flex-wrap:wrap}
+  .seg button{flex:1; min-width:70px; background:#1c212c; color:#cdd4e0; border:1px solid #2a3140; border-radius:10px; padding:11px; font-size:13px; font-family:inherit; font-weight:600}
+  .seg button.on{background:var(--accent); color:#fff; border-color:var(--accent)}
+  .toggles{display:flex; flex-direction:column; gap:12px; margin-top:16px; font-size:14px; color:#cdd4e0}
+  .toggles label{display:flex; align-items:center; gap:10px}
+  .doneBtn{width:100%; margin-top:18px; background:var(--accent); color:#fff; border:none; border-radius:14px; padding:15px; font-size:16px; font-weight:700; font-family:inherit}
+
+  #countdown{position:absolute; inset:0; display:none; align-items:center; justify-content:center; font-size:110px; font-weight:800; background:rgba(0,0,0,.25); z-index:7; text-shadow:0 4px 30px rgba(0,0,0,.6)}
+
+  #result{position:absolute; inset:0; background:#000; z-index:30; display:none; flex-direction:column}
+  #result video{flex:1; width:100%; object-fit:contain; background:#000}
+  #resultBar{padding:14px 18px calc(env(safe-area-inset-bottom) + 18px); display:flex; flex-direction:column; gap:10px; background:#12151c}
+  #resultBar .note{font-size:12.5px; color:#9aa4b5; line-height:1.5; text-align:center}
+  #resultBar .btns{display:flex; gap:10px}
+  #saveBtn{flex:2; text-align:center; text-decoration:none; background:var(--ok); color:#000; font-weight:800; border-radius:14px; padding:15px; font-size:16px}
+  #redoBtn{flex:1; background:#2a3140; color:#fff; border:none; border-radius:14px; padding:15px; font-size:15px; font-weight:600; font-family:inherit}
+
+  #toast{position:absolute; bottom:120px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,.8); padding:10px 16px; border-radius:12px; font-size:13px; z-index:8; display:none; max-width:80%; text-align:center}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <canvas id="canvas"></canvas>
+
+    <!-- reading overlay (not recorded, unless "show in video" is on) -->
+    <div id="teleWrap" class="shaded"><div id="teleText"></div></div>
+
+    <div id="startScreen">
+      <h1>🎬 Teleprompter</h1>
+      <p>Records clean vertical video while your script scrolls on screen — just for you to read. Ready to upload to TikTok.</p>
+      <button class="big" id="startBtn">Turn on camera</button>
+      <p style="font-size:12px">Everything stays on your phone. Nothing is uploaded.</p>
+    </div>
+
+    <div id="topbar">
+      <button class="iconbtn" id="flipBtn" title="Flip camera">🔄</button>
+      <div id="recBadge"><span class="dot"></span><span id="recTime">0:00</span></div>
+      <button class="iconbtn" style="visibility:hidden">·</button>
+    </div>
+
+    <div id="countdown">3</div>
+
+    <div id="controls">
+      <button class="sidebtn" id="scriptBtn">📝<small>Script</small></button>
+      <button id="recordBtn" title="Record"></button>
+      <button class="sidebtn" id="flipBtn2">🔄<small>Flip</small></button>
+    </div>
+
+    <div id="toast"></div>
+
+    <div id="sheetOverlay"></div>
+    <div id="sheet">
+      <div class="grab"></div>
+      <div class="lbl">Your script</div>
+      <textarea id="script" placeholder="Type or paste what you want to say...">Hey y'all! Quick one for you today.
+
+Reading from a teleprompter takes a sec to get used to — slow the speed down if it feels fast.
+
+Look right into the camera, smile, and just talk to me like a friend.
+
+When you're ready, hit the red button. Let's go!</textarea>
+
+      <div class="lbl">Scroll speed</div>
+      <div class="rangeRow"><input type="range" id="speed" min="10" max="180" value="55"><b id="speedVal">55</b></div>
+
+      <div class="lbl">Text size</div>
+      <div class="rangeRow"><input type="range" id="size" min="16" max="46" value="26"><b id="sizeVal">26</b></div>
+
+      <div class="lbl">Camera zoom (drag right to zoom in)</div>
+      <div class="rangeRow"><input type="range" id="zoom" min="100" max="220" value="100"><b id="zoomVal">1.0x</b></div>
+
+      <div class="lbl">Text position</div>
+      <div class="seg" id="posSeg">
+        <button data-pos="top">Top</button>
+        <button data-pos="center" class="on">Center</button>
+        <button data-pos="bottom">Bottom</button>
+      </div>
+
+      <div class="toggles">
+        <label><input type="checkbox" id="mirrorCam" checked> Mirror me (so I'm not backwards on screen)</label>
+        <label><input type="checkbox" id="shade" checked> Dark shade behind words (easier to read)</label>
+        <label><input type="checkbox" id="burnIn"> Also show the words in the final video</label>
+      </div>
+
+      <button class="doneBtn" id="doneBtn">Done</button>
+    </div>
+  </div>
+
+  <div id="result">
+    <video id="resultVideo" controls playsinline></video>
+    <div id="resultBar">
+      <div class="btns">
+        <a id="saveBtn" download="tiktok-teleprompter.mp4">⬇ Save video</a>
+        <button id="redoBtn">Retake</button>
+      </div>
+      <div class="note" id="saveNote"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const $=id=>document.getElementById(id);
+  const stage=$('stage'), canvas=$('canvas'), ctx=canvas.getContext('2d');
+  const teleWrap=$('teleWrap'), teleText=$('teleText');
+  const startScreen=$('startScreen'), startBtn=$('startBtn');
+  const recordBtn=$('recordBtn'), recBadge=$('recBadge'), recTime=$('recTime'), countdownEl=$('countdown');
+  const scriptBtn=$('scriptBtn'), sheet=$('sheet'), sheetOverlay=$('sheetOverlay'), doneBtn=$('doneBtn');
+  const scriptEl=$('script'), speedEl=$('speed'), sizeEl=$('size'), speedVal=$('speedVal'), sizeVal=$('sizeVal');
+  const posSeg=$('posSeg'), mirrorCam=$('mirrorCam'), shade=$('shade'), burnIn=$('burnIn');
+  const zoomEl=$('zoom'), zoomVal=$('zoomVal');
+  const flipBtn=$('flipBtn'), flipBtn2=$('flipBtn2');
+  const resultEl=$('result'), resultVideo=$('resultVideo'), saveBtn=$('saveBtn'), redoBtn=$('redoBtn'), saveNote=$('saveNote');
+  const toast=$('toast');
+
+  const W=1080, H=1920;            // recorded canvas (vertical 9:16)
+  canvas.width=W; canvas.height=H;
+
+  const FRAC={ top:{t:0.08,h:0.34}, center:{t:0.30,h:0.40}, bottom:{t:0.55,h:0.34} };
+
+  let stream=null, video=null, facing='user';
+  let recorder=null, chunks=[], recording=false, recStart=0, timerId=null;
+  let scrollPx=0, lastTs=0, pos='center';
+  const isIOS=/iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+
+  speedEl.oninput=()=>speedVal.textContent=speedEl.value;
+  sizeEl.oninput =()=>{ sizeVal.textContent=sizeEl.value; applyTextStyle(); };
+  zoomEl.oninput =()=>{ zoomVal.textContent = (parseInt(zoomEl.value,10)/100).toFixed(1)+'x'; };
+
+  posSeg.querySelectorAll('button').forEach(b=>b.onclick=()=>{
+    posSeg.querySelectorAll('button').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on'); pos=b.dataset.pos; layoutOverlay(); resetScroll();
+  });
+  shade.onchange=()=>{ teleWrap.classList.toggle('shaded', shade.checked); };
+  burnIn.onchange=()=>{ updateOverlayVisibility(); };
+  scriptEl.oninput=()=>{ teleText.textContent=scriptEl.value; resetScroll(); };
+
+  function updateOverlayVisibility(){
+    // When burning into video, the words are drawn on the canvas instead, so hide the DOM layer.
+    teleWrap.style.display = burnIn.checked ? 'none' : 'block';
+  }
+
+  function applyTextStyle(){ teleText.style.fontSize = sizeEl.value + 'px'; }
+
+  function dispSize(){ const r=stage.getBoundingClientRect(); return {w:r.width, h:r.height}; }
+
+  function layoutOverlay(){
+    const d=dispSize(); const f=FRAC[pos];
+    teleWrap.style.top = (d.h*f.t)+'px';
+    teleWrap.style.height = (d.h*f.h)+'px';
+  }
+
+  // Start the first line already parked at the reading spot so text shows the instant you record.
+  function resetScroll(){ const d=dispSize(); scrollPx = d.h*FRAC[pos].h*0.20; applyScroll(); }
+  function applyScroll(){ teleText.style.transform='translateY('+scrollPx+'px)'; }
+
+  async function startCamera(){
+    if(stream) stream.getTracks().forEach(t=>t.stop());
+    try{
+      stream=await navigator.mediaDevices.getUserMedia({
+        video:{ facingMode:facing, width:{ideal:1920}, height:{ideal:1440} },
+        audio:{ echoCancellation:true, noiseSuppression:true }
+      });
+    }catch(e){ showToast('Camera/mic blocked: '+e.message,5000); return false; }
+    if(!video){ video=document.createElement('video'); video.muted=true; video.playsInline=true; video.setAttribute('playsinline',''); }
+    video.srcObject=stream; await video.play();
+    try{ const s=stream.getVideoTracks()[0].getSettings(); showToast('Camera feed: '+(s.width||video.videoWidth)+'×'+(s.height||video.videoHeight),4000); }catch(e){}
+    return true;
+  }
+
+  startBtn.onclick=async ()=>{
+    startBtn.disabled=true; startBtn.textContent='Starting…';
+    const ok=await startCamera();
+    if(!ok){ startBtn.disabled=false; startBtn.textContent='Turn on camera'; return; }
+    startScreen.style.display='none';
+    teleText.textContent=scriptEl.value; applyTextStyle();
+    layoutOverlay(); updateOverlayVisibility(); resetScroll();
+    lastTs=0; drawLoop();
+  };
+  window.addEventListener('resize', ()=>{ layoutOverlay(); });
+
+  function flip(){ facing=(facing==='user'?'environment':'user'); startCamera(); }
+  flipBtn.onclick=flip; flipBtn2.onclick=flip;
+
+  function openSheet(){ sheet.classList.add('open'); sheetOverlay.classList.add('open'); }
+  function closeSheet(){ sheet.classList.remove('open'); sheetOverlay.classList.remove('open'); }
+  scriptBtn.onclick=openSheet; doneBtn.onclick=closeSheet; sheetOverlay.onclick=closeSheet;
+
+  function showToast(t,ms){ toast.textContent=t; toast.style.display='block'; clearTimeout(toast._t); toast._t=setTimeout(()=>toast.style.display='none', ms||2600); }
+
+  function drawCentered(scale, blur){
+    const iw=video.videoWidth, ih=video.videoHeight;
+    const dw=iw*scale, dh=ih*scale;
+    ctx.save();
+    if(blur) ctx.filter='blur(22px)';
+    if(mirrorCam.checked && facing==='user'){ ctx.translate(W,0); ctx.scale(-1,1); }
+    ctx.drawImage(video, (W-dw)/2, (H-dh)/2, dw, dh);
+    ctx.restore();
+  }
+  function drawCamera(){
+    const iw=video.videoWidth, ih=video.videoHeight; if(!iw) return;
+    const cover=Math.max(W/iw, H/ih);   // fills the 9:16 frame edge-to-edge, sharp
+    const z=cover*(parseInt(zoomEl.value,10)/100);  // 100% = full-bleed; higher = zoom in
+    drawCentered(z, false);
+  }
+
+  // Only used when "show words in video" is on.
+  function wrapLines(text,maxWidth,fontPx){
+    ctx.font=`700 ${fontPx}px -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif`;
+    const paras=text.replace(/\r/g,'').split('\n'); const lines=[];
+    for(const p of paras){
+      if(p.trim()===''){ lines.push(''); continue; }
+      const words=p.split(/\s+/); let cur='';
+      for(const w of words){ const test=cur?cur+' '+w:w;
+        if(ctx.measureText(test).width>maxWidth && cur){ lines.push(cur); cur=w; } else cur=test; }
+      if(cur) lines.push(cur);
+    }
+    return lines;
+  }
+  function drawBurnText(){
+    const d=dispSize(); const r=W/d.w;              // display px -> canvas px
+    const f=FRAC[pos]; const regionTop=H*f.t, regionH=H*f.h;
+    const fontPx=parseInt(sizeEl.value,10)*r; const lineH=fontPx*1.32; const marginX=W*0.07;
+    const lines=wrapLines(scriptEl.value, W-marginX*2, fontPx);
+    ctx.save(); ctx.beginPath(); ctx.rect(0,regionTop,W,regionH); ctx.clip();
+    if(shade.checked){
+      const g=ctx.createLinearGradient(0,regionTop,0,regionTop+regionH);
+      g.addColorStop(0,'rgba(0,0,0,0)'); g.addColorStop(.12,'rgba(0,0,0,.5)');
+      g.addColorStop(.88,'rgba(0,0,0,.5)'); g.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle=g; ctx.fillRect(0,regionTop,W,regionH);
+    }
+    ctx.font=`700 ${fontPx}px -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif`;
+    ctx.textAlign='center'; ctx.textBaseline='top'; ctx.fillStyle='#fff';
+    ctx.shadowColor='rgba(0,0,0,.9)'; ctx.shadowBlur=fontPx*0.14;
+    let y=regionTop + scrollPx*r;
+    for(const ln of lines){ if(y>regionTop-lineH && y<regionTop+regionH+lineH) ctx.fillText(ln,W/2,y); y+=lineH; }
+    ctx.restore();
+  }
+
+  function drawLoop(ts){
+    requestAnimationFrame(drawLoop);
+    if(!video) return;
+    const now=ts||performance.now(); if(!lastTs) lastTs=now;
+    const dt=Math.min(0.05,(now-lastTs)/1000); lastTs=now;
+
+    ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
+    drawCamera();
+
+    // advance scroll while recording
+    if(recording){
+      const d=dispSize();
+      const speedPx=parseInt(speedEl.value,10)*0.7;   // display px / sec
+      scrollPx-=speedPx*dt;
+      const textH = burnIn.checked ? 99999 : teleText.offsetHeight;
+      const regionH=d.h*FRAC[pos].h;
+      if(scrollPx + textH < 0){ scrollPx=regionH; }     // loop long scripts
+      applyScroll();
+    }
+
+    if(burnIn.checked) drawBurnText();
+  }
+
+  function pickMime(){
+    const opts=['video/mp4;codecs=h264,aac','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
+    for(const m of opts){ if(window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m; }
+    return '';
+  }
+
+  function runCountdown(n){
+    return new Promise(res=>{ countdownEl.style.display='flex'; let c=n; countdownEl.textContent=c;
+      const iv=setInterval(()=>{ c--; if(c<=0){ clearInterval(iv); countdownEl.style.display='none'; res(); } else countdownEl.textContent=c; },1000); });
+  }
+
+  recordBtn.onclick=async ()=>{
+    if(!stream) return;
+    if(!recording){
+      recordBtn.disabled=true; closeSheet();
+      resetScroll();
+      await runCountdown(3);
+      const cs=canvas.captureStream(30);
+      const a=stream.getAudioTracks()[0]; if(a) cs.addTrack(a);
+      chunks=[]; const mime=pickMime();
+      try{ recorder=new MediaRecorder(cs, mime?{mimeType:mime,videoBitsPerSecond:8_000_000}:undefined); }
+      catch(e){ showToast('Recording not supported: '+e.message,5000); recordBtn.disabled=false; return; }
+      recorder._mime=mime||'video/webm';
+      recorder.ondataavailable=e=>{ if(e.data&&e.data.size) chunks.push(e.data); };
+      recorder.onstop=finalize; recorder.start(200);
+      recording=true; recStart=performance.now();
+      recordBtn.classList.add('recording'); recordBtn.disabled=false;
+      recBadge.style.display='flex'; tick();
+    } else {
+      recording=false; recorder.stop();
+      recordBtn.classList.remove('recording'); recBadge.style.display='none'; clearTimeout(timerId);
+    }
+  };
+
+  function tick(){ if(!recording) return;
+    const s=Math.floor((performance.now()-recStart)/1000);
+    recTime.textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); timerId=setTimeout(tick,250); }
+
+  function finalize(){
+    const type=(recorder._mime||'').indexOf('mp4')>=0?'video/mp4':'video/webm';
+    const ext=type==='video/mp4'?'mp4':'webm';
+    const blob=new Blob(chunks,{type}); const url=URL.createObjectURL(blob);
+    resultVideo.src=url; saveBtn.href=url; saveBtn.download='tiktok-teleprompter.'+ext;
+    const mb=(blob.size/1048576).toFixed(1);
+    const clean = burnIn.checked ? '' : ' Clean recording — just you, no words on it.';
+    if(isIOS){
+      saveNote.innerHTML='<b>Save to camera roll:</b> tap the <b>share</b> icon in the player (or press &amp; hold the video) → <b>Save Video</b>, then open TikTok → + → Upload.'+clean+' ('+ext.toUpperCase()+', '+mb+' MB)';
+    } else {
+      saveNote.innerHTML='Tap <b>Save video</b> to download, then upload it in TikTok.'+clean+' ('+ext.toUpperCase()+', '+mb+' MB)';
+    }
+    resultEl.style.display='flex';
+  }
+
+  redoBtn.onclick=()=>{ resultEl.style.display='none'; resultVideo.pause(); resetScroll(); };
+  window.addEventListener('beforeunload',()=>{ if(stream) stream.getTracks().forEach(t=>t.stop()); });
+})();
+</script>
+</body>
+</html>
